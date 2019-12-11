@@ -1,0 +1,101 @@
+Resources:
+
+  EbsBackupsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "lambda.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: /
+
+
+  RolePolicies: 
+    Type: "AWS::IAM::Policy"
+    Properties: 
+      PolicyName: "snapCDforEbsBackup"
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'logs:*'
+            Resource: 'arn:aws:logs:*:*:*'
+          - Effect: Allow
+            Action: 'ec2:Describe*'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'ec2:CreateSnapshot'
+              - 'ec2:DeleteSnapshot'
+              - 'ec2:CreateTags'
+              - 'ec2:ModifySnapshotAttribute'
+              - 'ec2:ResetSnapshotAttribute'
+            Resource: 
+              - '*'
+      Roles: 
+        - Ref: "EbsBackupsRole"
+
+  EbsBackupSnapshotCreateFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - EbsBackupsRole
+      - RolePolicies
+    Properties: 
+      Code:  
+        S3Bucket: mybucket
+        S3Key: lambdabuilds/ebs-backup-snapshot-create.zip
+      Description: 'Creates snapshots of attached EBS volumes'
+      FunctionName: ebs-backup-snapshot-create
+      Handler: ebs-backup-snapshot-create.lambda_handler
+      Runtime: python3.7
+      MemorySize: 128
+      Timeout: 120
+      Role: !GetAtt 
+        - EbsBackupsRole
+        - Arn
+
+  EbsBackupSnapshotCleanupFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - EbsBackupsRole
+      - RolePolicies
+    Properties:
+      Code: 
+        S3Bucket: mybucket
+        S3Key: lambdabuilds/ebs-backup-snapshot-cleanup.zip
+      Description: 'Deletes snapshots created by ebs-backup-snapshot-create'
+      FunctionName: ebs-backup-snapshot-cleanup
+      Handler: ebs-backup-snapshot-cleanup.lambda_handler
+      Runtime: python3.7
+      MemorySize: 1024
+      Timeout: 120
+      Role: !GetAtt 
+        - EbsBackupsRole
+        - Arn
+  
+  RunWeekly:
+    DependsOn:
+      - EbsBackupSnapshotCreateFunction
+      - EbsBackupSnapshotCleanupFunction
+    Type: AWS::Events::Rule
+    Properties: 
+      ScheduleExpression: cron(49 16 ? * WED *)
+      State: ENABLED
+      Targets: 
+        -
+          Arn: !GetAtt
+              - EbsBackupSnapshotCreateFunction
+              - Arn
+          Id: TargetEbsBackupSnapshotCreateFunction
+        -
+          Arn: !GetAtt
+              - EbsBackupSnapshotCleanupFunction
+              - Arn
+          Id: TargetEbsBackupSnapshotCleanupFunction
